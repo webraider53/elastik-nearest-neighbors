@@ -74,31 +74,40 @@ public class LshModel {
 
     }
 
-    public Map<String, Long> getVectorHashes(List<Double> vector) {
+    public List<Map<String, Long>> getVectorHashes(List<List<Double>> vectors) {
 
         RealMatrix xDotNT, vectorAsMatrix;
         RealVector threshold;
-        Map<String, Long> hashes = new HashMap<>();
+        List<Map<String, Long>> hashes = new ArrayList<>();
         Long hash;
         Integer i, j;
 
-        // Have to convert the vector to a matrix to support multiplication below.
-        // TODO: if the List<Double> vector argument can be changed to an Array double[] or float[], this would be faster.
-        vectorAsMatrix = MatrixUtils.createRealMatrix(1, nbDimensions);
-        for (i = 0; i < nbDimensions; i++)
-            vectorAsMatrix.setEntry(0, i, vector.get(i));
+        for (int frame = 0; frame < vectors.size(); frame++) {
+            List<Double> v = vectors.get(frame);
 
-        // Compute the hash for this vector with respect to each table.
-        for (i = 0; i < nbTables; i++) {
-            xDotNT = vectorAsMatrix.multiply(normalsTransposed.get(i));
-            threshold = thresholds.get(i);
-            hash = 0L;
-            for (j = 0; j < nbBitsPerTable; j++)
-                if (xDotNT.getEntry(0, j) > threshold.getEntry(j))
-                    hash += (long) Math.pow(2, j);
-            hashes.put(i.toString(), hash);
+            // Have to convert the vector to a matrix to support multiplication below.
+            // TODO: if the List<Double> vector argument can be changed to an Array double[] or float[], this would be faster.
+            vectorAsMatrix = MatrixUtils.createRealMatrix(1, nbDimensions);
+            for (i = 0; i < nbDimensions; i++)
+                vectorAsMatrix.setEntry(0, i, v.get(i));
+
+            // Compute the hash for this vector with respect to each table.
+            for (i = 0; i < nbTables; i++) {
+                xDotNT = vectorAsMatrix.multiply(normalsTransposed.get(i));
+                threshold = thresholds.get(i);
+                hash = 0L;
+                for (j = 0; j < nbBitsPerTable; j++)
+                    if (xDotNT.getEntry(0, j) > threshold.getEntry(j))
+                        hash += (long) Math.pow(2, j);
+
+                try {
+                    hashes.get(frame);
+                } catch ( IndexOutOfBoundsException e ) {
+                    hashes.add(frame, new HashMap<String, Long>());
+                }
+                hashes.get(frame).put(i.toString(), hash);
+            }
         }
-
         return hashes;
     }
 

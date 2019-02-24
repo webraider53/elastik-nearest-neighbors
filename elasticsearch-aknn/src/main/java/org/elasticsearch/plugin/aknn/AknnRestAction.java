@@ -39,6 +39,7 @@ import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.search.SearchHit;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -48,6 +49,8 @@ import java.util.Map;
 import static java.lang.Math.min;
 import static org.elasticsearch.rest.RestRequest.Method.GET;
 import static org.elasticsearch.rest.RestRequest.Method.POST;
+
+import org.elasticsearch.common.xcontent.DeprecationHandler;
 
 public class AknnRestAction extends BaseRestHandler {
 
@@ -88,11 +91,32 @@ public class AknnRestAction extends BaseRestHandler {
             return handleCreateRequest(restRequest, client);
     }
 
-    public static Double euclideanDistance(List<Double> A, List<Double> B) {
-        Double squaredDistance = 0.;
-        for (Integer i = 0; i < A.size(); i++)
-            squaredDistance += Math.pow(A.get(i) - B.get(i), 2);
-        return Math.sqrt(squaredDistance);
+    public static Double euclideanDistance(List<List<Double>> A, List<List<Double>> B) {
+        List<Double> squaredDistances = new ArrayList<Double>();
+
+        for (List<Double> A_frame : A) {
+            for (List<Double> B_frame : B) {
+                Double squaredDistance = 0.;
+                for (Integer i = 0; i < A_frame.size(); i++)
+                    squaredDistance += Math.pow(A_frame.get(i) - B_frame.get(i), 2);
+                squaredDistances.add(Math.sqrt(squaredDistance));
+            }
+        }
+
+        // squaredDistances.sort(Collections.reverseOrder());
+        Collections.sort(squaredDistances);
+
+        Integer top = A.size();
+        if(B.size() < A.size()){
+            top = B.size();
+        }
+        squaredDistances = squaredDistances.subList(0, top);
+
+        Double squaredDistanceSum = 0.;
+        for (Double sd : squaredDistances) {
+            squaredDistanceSum += sd;
+        }
+        return squaredDistanceSum / squaredDistances.size();
     }
 
     private RestChannelConsumer handleSearchRequest(RestRequest restRequest, NodeClient client) throws IOException {
@@ -117,21 +141,29 @@ public class AknnRestAction extends BaseRestHandler {
         logger.info("Parse query document hashes");
         stopWatch.start("Parse query document hashes");
         @SuppressWarnings("unchecked")
-        Map<String, Long> queryHashes = (Map<String, Long>) baseSource.get(HASHES_KEY);
+        List<Map<String, Long>> queryHashes = (List<Map<String, Long>>) baseSource.get(HASHES_KEY);
         stopWatch.stop();
 
         stopWatch.start("Parse query document vector");
         @SuppressWarnings("unchecked")
-        List<Double> queryVector = (List<Double>) baseSource.get(VECTOR_KEY);
+        List<List<Double>> queryVector = (List<List<Double>>) baseSource.get(VECTOR_KEY);
         stopWatch.stop();
 
         // Retrieve the documents with most matching hashes. https://stackoverflow.com/questions/10773581
+        // FIXME This works when comparing single image but fails with "too_many_clauses" when searching gif
         logger.info("Build boolean query from hashes");
         stopWatch.start("Build boolean query from hashes");
         QueryBuilder queryBuilder = QueryBuilders.boolQuery();
-        for (Map.Entry<String, Long> entry : queryHashes.entrySet()) {
-            String termKey = HASHES_KEY + "." + entry.getKey();
-            ((BoolQueryBuilder) queryBuilder).should(QueryBuilders.termQuery(termKey, entry.getValue()));
+        for (Map<String, Long> frame : queryHashes) {
+            for (Map.Entry<String, Long> entry : frame.entrySet()) {
+                String termKey = HASHES_KEY + "." + entry.getKey();
+                List<Long> termValues = new ArrayList<>();
+                for (Map<String, Long> f2 : queryHashes) {
+                    Object termValue = (Object)f2.get(entry.getKey());
+                    termValues.add(Long.valueOf((Integer)termValue));
+                }
+                ((BoolQueryBuilder) queryBuilder).should(QueryBuilders.termsQuery(termKey, termValues));
+            }
         }
         stopWatch.stop();
 
@@ -154,7 +186,7 @@ public class AknnRestAction extends BaseRestHandler {
         for (SearchHit hit: approximateSearchResponse.getHits()) {
             Map<String, Object> hitSource = hit.getSourceAsMap();
             @SuppressWarnings("unchecked")
-            List<Double> hitVector = (List<Double>) hitSource.get(VECTOR_KEY);
+            List<List<Double>> hitVector = (List<List<Double>>) hitSource.get(VECTOR_KEY);
             hitSource.remove(VECTOR_KEY);
             hitSource.remove(HASHES_KEY);
             modifiedSortedHits.add(new HashMap<String, Object>() {{
@@ -199,7 +231,10 @@ public class AknnRestAction extends BaseRestHandler {
         stopWatch.start("Parse request");
 
         XContentParser xContentParser = XContentHelper.createParser(
-                restRequest.getXContentRegistry(), restRequest.content(), restRequest.getXContentType());
+                restRequest.getXContentRegistry(),
+                DeprecationHandler.THROW_UNSUPPORTED_OPERATION,
+                restRequest.content(),
+                restRequest.getXContentType());
         Map<String, Object> contentMap = xContentParser.mapOrdered();
         @SuppressWarnings("unchecked")
         Map<String, Object> sourceMap = (Map<String, Object>) contentMap.get("_source");
@@ -251,7 +286,10 @@ public class AknnRestAction extends BaseRestHandler {
         logger.info("Parse request parameters");
         stopWatch.start("Parse request parameters");
         XContentParser xContentParser = XContentHelper.createParser(
-                restRequest.getXContentRegistry(), restRequest.content(), restRequest.getXContentType());
+                restRequest.getXContentRegistry(),
+                DeprecationHandler.THROW_UNSUPPORTED_OPERATION,
+                restRequest.content(),
+                restRequest.getXContentType());
         Map<String, Object> contentMap = xContentParser.mapOrdered();
         final String index = (String) contentMap.get("_index");
         final String type = (String) contentMap.get("_type");
@@ -299,8 +337,8 @@ public class AknnRestAction extends BaseRestHandler {
             @SuppressWarnings("unchecked")
             Map<String, Object> source = (Map<String, Object>) doc.get("_source");
             @SuppressWarnings("unchecked")
-            List<Double> vector = (List<Double>) source.get(VECTOR_KEY);
-            source.put(HASHES_KEY, lshModel.getVectorHashes(vector));
+            List<List<Double>> vectors = (List<List<Double>>) source.get(VECTOR_KEY);
+            source.put(HASHES_KEY, lshModel.getVectorHashes(vectors));
             bulkIndexRequest.add(client
                     .prepareIndex(index, type, (String) doc.get("_id"))
                     .setSource(source));

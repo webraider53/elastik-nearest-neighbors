@@ -124,6 +124,8 @@ This returns:
 Given a batch of new vectors, hash each vector using a pre-defined LSH model 
 and store its raw and hashed values in an Elasticsearch document.
 
+Modified to store vectors for gifs.
+
 ```
 POST <elasticsearch host>:9200/_aknn_index
 
@@ -135,7 +137,11 @@ POST <elasticsearch host>:9200/_aknn_index
         {
             "_id": 1,
             "_source": {
-                "_aknn_vector": [0.12, 0.23, ...],
+                "_aknn_vector": [
+                       [0.12, 0.23, ...],   # vectors of frame 1
+                       [0.12, 0.23, ...],   # vectors of frame 2
+                       ...
+                 ],
 
                 # Any other fields you want...
             }
