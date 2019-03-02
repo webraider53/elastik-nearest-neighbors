@@ -234,6 +234,7 @@ public class AknnRestAction extends BaseRestHandler {
         stopWatch.stop();
 
         // Retrieve the documents with most matching hashes. https://stackoverflow.com/questions/10773581
+        // FIXME fails with too_many_clauses error when searching for gif/video
         logger.info("Build boolean query from hashes");
         stopWatch.start("Build boolean query from hashes");
         QueryBuilder queryBuilder = QueryBuilders.boolQuery();
