@@ -141,6 +141,7 @@ POST <elasticsearch host>:9200/_aknn_index
                        [0.12, 0.23, ...],   # vectors of frame 1
                        [0.12, 0.23, ...],   # vectors of frame 2
                        ...
+                       [0.12, 0.23, ...],  # vectors of frame n
                  ],
 
                 # Any other fields you want...

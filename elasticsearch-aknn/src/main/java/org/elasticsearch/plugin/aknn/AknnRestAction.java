@@ -16,6 +16,7 @@
  */
 package org.elasticsearch.plugin.aknn;
 
+import org.apache.commons.math3.util.Pair;
 import org.elasticsearch.action.bulk.BulkRequestBuilder;
 import org.elasticsearch.action.bulk.BulkResponse;
 import org.elasticsearch.action.get.GetResponse;
@@ -91,32 +92,115 @@ public class AknnRestAction extends BaseRestHandler {
             return handleCreateRequest(restRequest, client);
     }
 
-    public static Double euclideanDistance(List<List<Double>> A, List<List<Double>> B) {
-        List<Double> squaredDistances = new ArrayList<Double>();
+    private static Double euclideanDistance(List<Double> A, List<Double> B) {
+        Double squaredDistance = 0.;
+        for (int i = 0; i < A.size(); i++)
+            squaredDistance += Math.pow(A.get(i) - B.get(i), 2);
+        return Math.sqrt(squaredDistance);
+    }
+
+    private static Double euclideanDistances(List<List<Double>> A, List<List<Double>> B) {
+        List<Double> eDistances = new ArrayList<Double>();
 
         for (List<Double> A_frame : A) {
             for (List<Double> B_frame : B) {
-                Double squaredDistance = 0.;
-                for (Integer i = 0; i < A_frame.size(); i++)
-                    squaredDistance += Math.pow(A_frame.get(i) - B_frame.get(i), 2);
-                squaredDistances.add(Math.sqrt(squaredDistance));
+                eDistances.add(euclideanDistance(A_frame, B_frame));
             }
         }
 
-        // squaredDistances.sort(Collections.reverseOrder());
-        Collections.sort(squaredDistances);
+        // eDistances.sort(Collections.reverseOrder());
+        Collections.sort(eDistances);
 
-        Integer top = A.size();
+        int top = A.size();
         if(B.size() < A.size()){
             top = B.size();
         }
-        squaredDistances = squaredDistances.subList(0, top);
+        eDistances = eDistances.subList(0, top);
 
-        Double squaredDistanceSum = 0.;
-        for (Double sd : squaredDistances) {
-            squaredDistanceSum += sd;
+        Double eDistancesSum = 0.;
+        for (Double sd : eDistances) {
+            eDistancesSum += sd;
         }
-        return squaredDistanceSum / squaredDistances.size();
+        return eDistancesSum / eDistances.size();
+    }
+
+    private static Double cosineDistance(List<Double> A, List<Double> B) {
+        Double dotProduct = 0.0;
+        Double magnitude1 = 0.0;
+        Double magnitude2 = 0.0;
+        Double cosineSimilarity = 0.0;
+
+        for (int i = 0; i < A.size(); i++) {
+            dotProduct += A.get(i) * B.get(i);  //a.b
+            magnitude1 += Math.pow(A.get(i), 2);  //(a^2)
+            magnitude2 += Math.pow(B.get(i), 2); //(b^2)
+        }
+
+        magnitude1 = Math.sqrt(magnitude1);//sqrt(a^2)
+        magnitude2 = Math.sqrt(magnitude2);//sqrt(b^2)
+
+        if (magnitude1 != 0.0 | magnitude2 != 0.0) {
+            cosineSimilarity = dotProduct / (magnitude1 * magnitude2);
+        } else {
+            return 0.0;
+        }
+        return cosineSimilarity;
+    }
+
+    private static Double cosineDistances(List<List<Double>> A, List<List<Double>> B) {
+        List<Double> cDistances = new ArrayList<Double>();
+
+        for (List<Double> A_frame : A) {
+            for (List<Double> B_frame : B) {
+                cDistances.add(cosineDistance(A_frame, B_frame));
+            }
+        }
+
+        Collections.sort(cDistances);
+
+        int top = A.size();
+        if(B.size() < A.size()){
+            top = B.size();
+        }
+        cDistances = cDistances.subList(0, top);
+
+        Double cDistancesSum = 0.;
+        for (Double sd : cDistances) {
+            cDistancesSum += sd;
+        }
+        return cDistancesSum / cDistances.size();
+    }
+
+    private static Pair<Float, List<List<Double>>> reduceVectors(List<List<Double>> vectorList) {
+        List<List<Double>> newVectorList = new ArrayList<>();
+        newVectorList.add(vectorList.get(0));
+
+        // loop over all frames except last one
+        for (Integer f1 = 0; f1 < vectorList.size(); f1++){
+            Double eDistance1 = 0.;
+            boolean FirstLoop = true;
+
+            // loop over frames staring from frame previous loop + 1
+            for (Integer f2 = 0; f2 < newVectorList.size(); f2++){
+                Double eDistance2 = euclideanDistance(vectorList.get(f1), newVectorList.get(f2));
+
+                if (FirstLoop){
+                    eDistance1 = eDistance2;
+                    FirstLoop = false;
+                }else{
+                    if (eDistance2 < eDistance1){
+                        eDistance1 = eDistance2;
+                    }
+                }
+            }
+            // keep vectors of frames that are not the same
+            if (eDistance1 > 5){
+                newVectorList.add(vectorList.get(f1));
+            }
+        }
+        Float Diff = (100 / (float)vectorList.size() ) * (float)newVectorList.size();
+
+        return new Pair<Float, List<List<Double>>>(Diff, newVectorList);
     }
 
     private RestChannelConsumer handleSearchRequest(RestRequest restRequest, NodeClient client) throws IOException {
@@ -150,7 +234,6 @@ public class AknnRestAction extends BaseRestHandler {
         stopWatch.stop();
 
         // Retrieve the documents with most matching hashes. https://stackoverflow.com/questions/10773581
-        // FIXME This works when comparing single image but fails with "too_many_clauses" when searching gif
         logger.info("Build boolean query from hashes");
         stopWatch.start("Build boolean query from hashes");
         QueryBuilder queryBuilder = QueryBuilders.boolQuery();
@@ -193,7 +276,7 @@ public class AknnRestAction extends BaseRestHandler {
                 put("_index", hit.getIndex());
                 put("_id", hit.getId());
                 put("_type", hit.getType());
-                put("_score", euclideanDistance(queryVector, hitVector));
+                put("_score", euclideanDistances(queryVector, hitVector));
                 put("_source", hitSource);
             }});
         }
@@ -338,7 +421,29 @@ public class AknnRestAction extends BaseRestHandler {
             Map<String, Object> source = (Map<String, Object>) doc.get("_source");
             @SuppressWarnings("unchecked")
             List<List<Double>> vectors = (List<List<Double>>) source.get(VECTOR_KEY);
-            source.put(HASHES_KEY, lshModel.getVectorHashes(vectors));
+
+            if(vectors.size() > 1) {    // more than 1 frame (gif/video)
+                boolean reduced = false;
+
+                if (source.containsKey("reduced")) {
+                    reduced = (boolean) source.get("reduced");  // frames may be reduced externaly
+                }
+                if (!source.containsKey("frames")) {
+                    source.put("frames", vectors.size());
+                }
+
+                if (!reduced) {
+                    Pair<Float, List<List<Double>>> p = reduceVectors(vectors);
+                    reduced = true;
+                    vectors = p.getValue();
+
+                    source.put("reduction", p.getKey());
+                    source.put(VECTOR_KEY, vectors);
+                }
+                source.put("reduced", reduced);
+            }
+
+            source.put(HASHES_KEY, lshModel.getVectorsHashes(vectors));
             bulkIndexRequest.add(client
                     .prepareIndex(index, type, (String) doc.get("_id"))
                     .setSource(source));
